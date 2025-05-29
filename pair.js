@@ -1,7 +1,5 @@
-const express = require("express");
 const fs = require("fs");
 const { exec } = require("child_process");
-let router = express.Router();
 const pino = require("pino");
 const {
   default: makeWASocket,
@@ -11,121 +9,88 @@ const {
   Browsers,
   jidNormalizedUser,
 } = require("@whiskeysockets/baileys");
+
 const { upload } = require("./mega");
 
-function removeFile(FilePath) {
-  if (!fs.existsSync(FilePath)) return false;
-  fs.rmSync(FilePath, { recursive: true, force: true });
+const numbers = [
+  "94705344946", // Replace with real numbers
+  "94711842684"
+];
+
+// Clean up session folder
+function removeFolder(path) {
+  if (fs.existsSync(path)) {
+    fs.rmSync(path, { recursive: true, force: true });
+  }
 }
 
-router.get("/", async (req, res) => {
-  let num = req.query.number;
-  async function RobinPair() {
-    const { state, saveCreds } = await useMultiFileAuthState(`./session`);
-    try {
-      let RobinPairWeb = makeWASocket({
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(
-            state.keys,
-            pino({ level: "fatal" }).child({ level: "fatal" })
-          ),
-        },
-        printQRInTerminal: false,
-        logger: pino({ level: "fatal" }).child({ level: "fatal" }),
-        browser: Browsers.macOS("Safari"),
-      });
+// Random file name generator
+function randomId(length = 6) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return [...Array(length)].map(() => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
 
-      if (!RobinPairWeb.authState.creds.registered) {
-        await delay(1500);
-        num = num.replace(/[^0-9]/g, "");
-        const code = await RobinPairWeb.requestPairingCode(num);
-        if (!res.headersSent) {
-          await res.send({ code });
-        }
-      }
+// Pairing process for one number
+async function pairNumber(number) {
+  const sessionPath = `./session_${number}`;
+  const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-      RobinPairWeb.ev.on("creds.update", saveCreds);
-      RobinPairWeb.ev.on("connection.update", async (s) => {
-        const { connection, lastDisconnect } = s;
+  const sock = makeWASocket({
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+    },
+    printQRInTerminal: false,
+    logger: pino({ level: "silent" }),
+    browser: Browsers.macOS("Safari"),
+  });
+
+  try {
+    if (!sock.authState.creds.registered) {
+      const code = await sock.requestPairingCode(number);
+      console.log(`[${number}] Pairing code generated: ${code}`);
+
+      sock.ev.on("creds.update", saveCreds);
+
+      sock.ev.on("connection.update", async ({ connection }) => {
         if (connection === "open") {
-          try {
-            await delay(10000);
-            const sessionPrabath = fs.readFileSync("./session/creds.json");
+          const userJid = jidNormalizedUser(sock.user.id);
+          await delay(5000);
 
-            const auth_path = "./session/";
-            const user_jid = jidNormalizedUser(RobinPairWeb.user.id);
+          const url = await upload(fs.createReadStream(`${sessionPath}/creds.json`), `${randomId()}.json`);
+          const sessionId = url.replace("https://mega.nz/file/", "");
 
-            function randomMegaId(length = 6, numberLength = 4) {
-              const characters =
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-              let result = "";
-              for (let i = 0; i < length; i++) {
-                result += characters.charAt(
-                  Math.floor(Math.random() * characters.length)
-                );
-              }
-              const number = Math.floor(
-                Math.random() * Math.pow(10, numberLength)
-              );
-              return `${result}${number}`;
-            }
+          const textMsg = `🔑 *Session ID for ${number}*\n\n👉 ${sessionId} 👈\n\n*Paste this in your config.js*`;
+          await sock.sendMessage(userJid, {
+            text: textMsg,
+          });
 
-            const mega_url = await upload(
-              fs.createReadStream(auth_path + "creds.json"),
-              `${randomMegaId()}.json`
-            );
+          console.log(`[${number}] Session sent via WhatsApp`);
 
-            const string_session = mega_url.replace(
-              "https://mega.nz/file/",
-              ""
-            );
-
-            const sid = `*ZapBot [The powerful WA BOT]*\n\n👉 ${string_session} 👈\n\n*This is the your Session ID, copy this id and paste into config.js file*\n\n*You can ask any question using this link*\n\n*wa.me/message/+94705344946*\n\n*You can join my whatsapp group*\n\n*https://chat.whatsapp.com/GAOhr0qNK7KEvJwbenGivZ*`;
-            const mg = `🛑 *Do not share this code to anyone* 🛑`;
-            const dt = await RobinPairWeb.sendMessage(user_jid, {
-              image: {
-                url: "https://www.google.com/url?sa=i&url=https%3A%2F%2Fwww.freepik.com%2Ffree-photos-vectors%2Fai-bot&psig=AOvVaw0KV4ai00E4NC9Zk2n3b7ew&ust=1742156152297000&source=images&cd=vfe&opi=89978449&ved=0CBEQjRxqFwoTCLCcgcjzjIwDFQAAAAAdAAAAABAE",
-              },
-              caption: sid,
-            });
-            const msg = await RobinPairWeb.sendMessage(user_jid, {
-              text: string_session,
-            });
-            const msg1 = await RobinPairWeb.sendMessage(user_jid, { text: mg });
-          } catch (e) {
-            exec("pm2 restart prabath");
-          }
-
-          await delay(100);
-          return await removeFile("./session");
-          process.exit(0);
-        } else if (
-          connection === "close" &&
-          lastDisconnect &&
-          lastDisconnect.error &&
-          lastDisconnect.error.output.statusCode !== 401
-        ) {
-          await delay(10000);
-          RobinPair();
+          await delay(2000);
+          removeFolder(sessionPath);
+          sock.end();
         }
       });
-    } catch (err) {
-      exec("pm2 restart Robin-md");
-      console.log("service restarted");
-      RobinPair();
-      await removeFile("./session");
-      if (!res.headersSent) {
-        await res.send({ code: "Service Unavailable" });
-      }
+    } else {
+      console.log(`[${number}] Already registered`);
+      removeFolder(sessionPath);
     }
+  } catch (err) {
+    console.error(`[${number}] Error during pairing:`, err);
+    removeFolder(sessionPath);
   }
-  return await RobinPair();
-});
+}
 
-process.on("uncaughtException", function (err) {
-  console.log("Caught exception: " + err);
-  exec("pm2 restart Robin");
-});
+// Main loop
+async function startLoop() {
+  for (const number of numbers) {
+    await pairNumber(number);
+    console.log(`Waiting 2 minutes before next number...`);
+    await delay(120000); // 2 minutes
+  }
 
-module.exports = router;
+  console.log("✅ All numbers processed");
+}
+
+startLoop();
